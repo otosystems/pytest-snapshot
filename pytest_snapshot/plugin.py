@@ -5,7 +5,7 @@ import sys
 
 import pytest
 from packaging import version
-from typing import Optional, List
+from typing import Optional, List, Callable
 
 try:
     from pathlib import Path
@@ -41,9 +41,12 @@ def pytest_addoption(parser):
 def snapshot(request):
     default_snapshot_dir = get_default_snapshot_dir(request.node)
 
+    def default_snapshot_comparator(value_1, value_2):
+        return value_1 == value_2
+
     with Snapshot(request.config.option.snapshot_update,
                   request.config.option.allow_snapshot_deletion,
-                  default_snapshot_dir) as snapshot:
+                  default_snapshot_dir, default_snapshot_comparator) as snapshot:
         yield snapshot
 
 
@@ -54,14 +57,16 @@ class Snapshot(object):
     _updated_snapshots = None  # type: List[Path]
     _snapshots_to_delete = None  # type: List[Path]
     _snapshot_dir = None  # type: Optional[Path]
+    _snapshot_comparator = None  # type: Optional[Callable[[str, str], bool]]
 
-    def __init__(self, snapshot_update, allow_snapshot_deletion, snapshot_dir):
+    def __init__(self, snapshot_update, allow_snapshot_deletion, snapshot_dir, snapshot_comparator):
         self._snapshot_update = snapshot_update
         self._allow_snapshot_deletion = allow_snapshot_deletion
         self._created_snapshots = []
         self._updated_snapshots = []
         self._snapshots_to_delete = []
         self.snapshot_dir = snapshot_dir
+        self.snapshot_comparator = snapshot_comparator
 
     def __enter__(self):
         return self
@@ -97,6 +102,14 @@ class Snapshot(object):
     @snapshot_dir.setter
     def snapshot_dir(self, value):
         self._snapshot_dir = Path(value).absolute()
+
+    @property
+    def snapshot_comparator(self):
+        return self._snapshot_comparator
+
+    @snapshot_comparator.setter
+    def snapshot_comparator(self, func):
+        self._snapshot_comparator = func
 
     def _snapshot_path(self, snapshot_name):
         """
@@ -153,9 +166,9 @@ class Snapshot(object):
                 expected_on_right = version.parse(pytest.__version__) >= version.parse("5.4.0")
                 try:
                     if expected_on_right:
-                        assert value == expected_value
+                        assert self.snapshot_comparator(value, expected_value)
                     else:
-                        assert expected_value == value
+                        assert self.snapshot_comparator(expected_value, value)
                 except AssertionError as e:
                     snapshot_diff_msg = str(e)
                 else:
